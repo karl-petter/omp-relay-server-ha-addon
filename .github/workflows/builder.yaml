@@ -23,32 +23,34 @@ jobs:
       url: ${{ steps.normalize.outputs.url }}
       version: ${{ steps.normalize.outputs.version }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Get add-on information
         id: info
-        uses: home-assistant/actions/helpers/info@master
+        uses: home-assistant/actions/helpers/info@06749dd8c0b54f350bc69c8752456cee498808a3 # master (2026-10-11)
         with:
           path: "./omp-collab-relay"
 
       - name: Normalize add-on information
         id: normalize
+        env:
+          IMAGE_JSON: ${{ steps.info.outputs.image }}
+          NAME_JSON: ${{ steps.info.outputs.name }}
+          DESCRIPTION_JSON: ${{ steps.info.outputs.description }}
+          URL_JSON: ${{ steps.info.outputs.url }}
+          VERSION_JSON: ${{ steps.info.outputs.version }}
         run: |
-          image=${{ steps.info.outputs.image }}
+          image=$(jq -r . <<<"$IMAGE_JSON")
           echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
           echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
-          name=${{ steps.info.outputs.name }}
-          echo "name=${name}" >> "$GITHUB_OUTPUT"
-          description=${{ steps.info.outputs.description }}
-          echo "description=${description}" >> "$GITHUB_OUTPUT"
-          url=${{ steps.info.outputs.url }}
-          echo "url=${url}" >> "$GITHUB_OUTPUT"
-          version=${{ steps.info.outputs.version }}
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "name=$(jq -r . <<<"$NAME_JSON")" >> "$GITHUB_OUTPUT"
+          echo "description=$(jq -r . <<<"$DESCRIPTION_JSON")" >> "$GITHUB_OUTPUT"
+          echo "url=$(jq -r . <<<"$URL_JSON")" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r . <<<"$VERSION_JSON")" >> "$GITHUB_OUTPUT"
 
       - name: Prepare multi-arch build matrix
         id: matrix
-        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
         with:
           architectures: ${{ steps.info.outputs.architectures }}
           image-name: ${{ steps.normalize.outputs.image_name }}
@@ -67,12 +69,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Build image
-        uses: home-assistant/builder/actions/build-image@2026.09.0
+        uses: home-assistant/builder/actions/build-image@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
         with:
           arch: ${{ matrix.arch }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
@@ -92,15 +94,17 @@ jobs:
 
       - name: Set up Node for the smoke test
         if: github.event_name == 'pull_request'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
       - name: Run relay contract smoke test
         if: github.event_name == 'pull_request'
         timeout-minutes: 3
+        env:
+          IMAGE: ${{ matrix.image }}
         run: |
-          docker run -d --name relay-smoke -p 7466:7466 ${{ matrix.image }}:pr-smoke
+          docker run -d --name relay-smoke -p 7466:7466 "${IMAGE}:pr-smoke"
           for i in $(seq 1 20); do
             if docker logs relay-smoke 2>&1 | grep -q "listening on"; then
               break
@@ -127,7 +131,7 @@ jobs:
       packages: write
     steps:
       - name: Publish multi-arch manifest
-        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.09.0
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
         with:
           architectures: ${{ needs.prepare.outputs.architectures }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
