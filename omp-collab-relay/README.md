@@ -4,10 +4,11 @@ Self-hosted relay for [`oh-my-pi`](https://github.com/can1357/oh-my-pi) (omp) `/
 
 ## Not a drop-in for `my.omp.sh`
 
-This runs upstream's documented `local-relay.ts`: no TLS, no `/share` blob endpoints, no `/healthz`. omp only accepts plain `ws://` relay URLs when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname needs `wss://`. This add-on does not terminate TLS.
+This runs upstream's documented `local-relay.ts`: no TLS, no browser client (`GET /` 404s), no `/share` blob endpoints, no `/healthz`. omp only accepts plain `ws://` relay URLs when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname needs `wss://`. This add-on does not terminate TLS.
 
 - **Same machine as omp:** works unmodified via `ws://localhost:7466`.
 - **Any other machine:** front this add-on with your own TLS reverse proxy (Nginx Proxy Manager, Caddy, Cloudflare Tunnel, Traefik, etc.) and use the resulting `wss://` address.
+- **Browser/QR joining:** needs `collab.webUrl` pointed at a separately hosted copy of `packages/collab-web`'s static build — the parent repository publishes one via GitHub Pages; see its [README](https://github.com/karl-petter/omp-relay-server-ha-addon#self-hosting-the-browser-client-optional).
 
 ## Configuration
 

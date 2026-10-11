@@ -2,7 +2,7 @@
 
 A Home Assistant add-on repository that runs [`oh-my-pi`](https://github.com/can1357/oh-my-pi)'s local collab relay — the documented, source-available WebSocket stand-in for the hosted `my.omp.sh` relay used by omp's `/collab` live session sharing. It lets an omp host and guest terminals exchange end-to-end-encrypted collab frames through a relay you run yourself, on port 7466.
 
-**This is not a drop-in replacement for `my.omp.sh`.** `local-relay.ts` is explicitly documented upstream as a stand-in for local/offline use: no TLS, no browser client (`GET /`), no `/share` blob endpoints, no `/healthz` — it only handles the `GET /r/<roomId>` WebSocket upgrade. omp always prints a "join from a browser" link alongside the terminal one regardless of which relay you're using; against this add-on that link 404s, since there's no web client to serve it. Only terminal-to-terminal joining (`omp join <link>`) works here — browser/QR joining needs either the hosted `my.omp.sh` relay or your own separate hosting of `packages/collab-web`'s static build pointed at by `collab.webUrl`, neither of which this add-on provides. More importantly, both the omp CLI and the browser client validate relay URLs with the same rule: plain `ws://` is only accepted when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname must be `wss://`. This add-on does not terminate TLS itself.
+**This add-on alone is not a drop-in replacement for `my.omp.sh`.** `local-relay.ts` is explicitly documented upstream as a stand-in for local/offline use: no TLS, no browser client (`GET /`), no `/share` blob endpoints, no `/healthz` — it only handles the `GET /r/<roomId>` WebSocket upgrade. Browser/QR joining needs a separately hosted copy of `packages/collab-web`'s static build, pointed at by `collab.webUrl`; this repository builds and publishes one via GitHub Pages (see [Self-hosting the browser client](#self-hosting-the-browser-client-optional) below), so relay and browser client can both be fully self-hosted with no third party involved anywhere. More importantly, both the omp CLI and the browser client validate relay URLs with the same rule: plain `ws://` is only accepted when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname must be `wss://`. This add-on does not terminate TLS itself.
 
 In practice that means:
 
@@ -35,6 +35,8 @@ Set `collab.relayUrl` in omp's settings (see upstream [`docs/collab.md`](https:/
 - Same machine as the Home Assistant host (or localhost-presenting tunnel): `ws://localhost:7466`.
 - Any other machine: `wss://<your-proxy-domain>`, pointed at this add-on's port 7466 through your own TLS-terminating reverse proxy.
 
+Optionally also set `collab.webUrl` to a self-hosted copy of the browser client (see below) so the browser/QR link that `/collab` prints points at your own infrastructure instead of `my.omp.sh`.
+
 Or, for a one-off session without changing the default: `/collab ws://<home-assistant-host>:7466` (or the `wss://` proxy address).
 
 ## Fronting with TLS for remote access
@@ -63,6 +65,20 @@ Reusing the existing certificate on a new port avoids a second Let's Encrypt cer
 ### Nginx Proxy Manager (GUI, needs a database)
 
 If you'd rather manage proxy rules through a web UI, or already run Nginx Proxy Manager for other services, install the **MariaDB** and **Nginx Proxy Manager** add-ons from the Store, add a Proxy Host forwarding to `omp-collab-relay:7466` with **Websockets Support** enabled, and let it issue its own certificate for a domain of your choice. The Home Assistant add-on wrapper requires MariaDB rather than SQLite (likely to avoid SQLite file-locking issues reported on Raspberry Pi), so this path has more moving parts than the Caddy option above.
+
+## Self-hosting the browser client (optional)
+
+`/collab` always prints a browser link alongside the terminal one, but this add-on's relay doesn't serve that client itself (see the limitation above). This repository publishes one anyway, independent of the add-on: `.github/workflows/pages.yml` builds `packages/collab-web`'s static output from the same pinned `oh-my-pi` release the relay vendors, strips the bundled third-party analytics script, and deploys it to GitHub Pages on every push to `main` — no container, nothing added to the Home Assistant host.
+
+The room secret lives only in the URL fragment (the part after `#`), which browsers never send to the page's server by spec — GitHub Pages only ever serves the same static JS/CSS/HTML to every visitor; your actual session traffic goes straight from the browser to your relay over `wss://`, so this stays fully self-hosted end to end.
+
+If you've forked this repository, enable it once under your fork's **Settings → Pages → Source: GitHub Actions** (not on by default on a fork), then point omp at it:
+
+```
+omp config set collab.webUrl https://<your-fork-owner>.github.io/<your-fork-name>
+```
+
+`/collab` then prints a browser link pointing at your own GitHub Pages site instead of `my.omp.sh`, with the relay connection itself still carried entirely by this add-on.
 
 ## Versioning
 
