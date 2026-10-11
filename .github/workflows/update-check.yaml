@@ -15,36 +15,124 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Determine current and latest oh-my-pi version
+      - name: Determine current pin and the latest release eligible to adopt
         id: versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           current_ref=$(grep -oP '^ARG OMP_REF=\K.*' omp-collab-relay/Dockerfile)
-          latest_ref=$(gh api repos/can1357/oh-my-pi/releases/latest --jq .tag_name)
+          current_sha=$(grep -oP '^ARG OMP_SHA=\K.*' omp-collab-relay/Dockerfile)
           echo "current_ref=${current_ref}" >> "$GITHUB_OUTPUT"
-          echo "latest_ref=${latest_ref}" >> "$GITHUB_OUTPUT"
+          echo "current_sha=${current_sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Check whether the relay/wire source actually changed
+          # Only consider releases at least 72h old and strictly newer than
+          # what's already pinned: gives upstream's much larger user base
+          # time to surface problems before this pipeline trusts a release
+          # enough to build and publish from it. The default unpaginated
+          # page (30 most recent, newest-first) comfortably covers well
+          # over a week at this repo's release cadence.
+          cutoff=$(date -u -d '72 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          releases=$(gh api repos/can1357/oh-my-pi/releases)
+          current_published=$(jq -r --arg ref "$current_ref" '[.[] | select(.tag_name == $ref)] | first | .published_at // empty' <<<"$releases")
+          latest_ref=$(jq -r --arg cutoff "$cutoff" --arg since "$current_published" '
+            [.[] | select(.draft == false and .prerelease == false and .published_at <= $cutoff and .published_at > $since)]
+            | sort_by(.published_at) | last | .tag_name // empty
+          ' <<<"$releases")
+          if [[ -z "$latest_ref" ]]; then
+            echo "No release both newer than the current pin and at least 72h old; nothing to do."
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest_sha=$(gh api "repos/can1357/oh-my-pi/commits/${latest_ref}" --jq .sha)
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "latest_ref=${latest_ref}" >> "$GITHUB_OUTPUT"
+          echo "latest_sha=${latest_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the relay/wire source changed, and gather risk signals
         id: diff
-        if: steps.versions.outputs.current_ref != steps.versions.outputs.latest_ref
+        if: steps.versions.outputs.eligible == 'true' && steps.versions.outputs.current_sha != steps.versions.outputs.latest_sha
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_REF: ${{ steps.versions.outputs.current_ref }}
-          LATEST_REF: ${{ steps.versions.outputs.latest_ref }}
+          CURRENT_SHA: ${{ steps.versions.outputs.current_sha }}
+          LATEST_SHA: ${{ steps.versions.outputs.latest_sha }}
         run: |
-          changed=$(gh api "repos/can1357/oh-my-pi/compare/${CURRENT_REF}...${LATEST_REF}" \
-            --jq '[.files[].filename | select(startswith("packages/collab-web/") or startswith("packages/wire/") or . == "package.json")] | length')
+          compare=$(gh api "repos/can1357/oh-my-pi/compare/${CURRENT_SHA}...${LATEST_SHA}")
+
+          changed=$(jq '[.files[].filename | select(startswith("packages/collab-web/") or startswith("packages/wire/") or . == "package.json")] | length' <<<"$compare")
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+          if [[ "$changed" -eq 0 ]]; then
+            exit 0
+          fi
+
+          {
+            echo "changed_files<<EOF"
+            jq -r '.files[].filename' <<<"$compare"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "commit_summary<<EOF"
+            jq -r '.commits[] | "- `" + .sha[0:7] + "` " + (.author.login // .commit.author.email) + ": " + (.commit.message | split("\n")[0])' <<<"$compare"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          new_dependency=$(jq '[.files[].filename | select(. == "bun.lock" or test("package\\.json$"))] | length > 0' <<<"$compare")
+          total_changes=$(jq '[.files[].additions, .files[].deletions] | add // 0' <<<"$compare")
+          large_diff=$([[ "$total_changes" -gt 500 ]] && echo true || echo false)
+
+          mapfile -t commit_authors < <(jq -r '[.commits[] | (.author.login // .commit.author.email)] | unique | .[]' <<<"$compare")
+          known_file=".github/known-upstream-authors.txt"
+          unfamiliar=()
+          for a in "${commit_authors[@]}"; do
+            grep -qxF "$a" "$known_file" || unfamiliar+=("$a")
+          done
+
+          reasons=()
+          [[ "$new_dependency" == "true" ]] && reasons+=("- a dependency manifest or lockfile changed")
+          [[ "$large_diff" == "true" ]] && reasons+=("- large change (${total_changes} lines across the full compare)")
+          if [[ "${#unfamiliar[@]}" -gt 0 ]]; then
+            reasons+=("- commit(s) from an author not previously seen bumping this repo: ${unfamiliar[*]}")
+          fi
+
+          {
+            echo "unfamiliar_authors<<EOF"
+            printf '%s\n' "${unfamiliar[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "${#reasons[@]}" -gt 0 ]]; then
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "status_note<<EOF"
+              echo "**Held for manual review:**"
+              printf '%s\n' "${reasons[@]}"
+              echo ""
+              echo "Merge manually once satisfied -- required checks (build, smoke test, dependency audit) still gate the merge button either way."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_review=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "status_note<<EOF"
+              echo "Auto-merges once the build, relay contract smoke test, and dependency audit all pass."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Bump pinned version
         if: steps.diff.outputs.changed > '0'
         env:
           LATEST_REF: ${{ steps.versions.outputs.latest_ref }}
+          LATEST_SHA: ${{ steps.versions.outputs.latest_sha }}
+          UNFAMILIAR_AUTHORS: ${{ steps.diff.outputs.unfamiliar_authors }}
         run: |
           new_version="${LATEST_REF#v}"
           sed -i "s/^ARG OMP_REF=.*/ARG OMP_REF=${LATEST_REF}/" omp-collab-relay/Dockerfile
+          sed -i "s/^ARG OMP_SHA=.*/ARG OMP_SHA=${LATEST_SHA}/" omp-collab-relay/Dockerfile
           sed -i "s/^version: .*/version: \"${new_version}\"/" omp-collab-relay/config.yaml
+          if [[ -n "$UNFAMILIAR_AUTHORS" ]]; then
+            { cat .github/known-upstream-authors.txt; printf '%s\n' "$UNFAMILIAR_AUTHORS"; } | sed '/^$/d' | sort -u > /tmp/known-authors.txt
+            mv /tmp/known-authors.txt .github/known-upstream-authors.txt
+          fi
 
       - name: Open pull request
         if: steps.diff.outputs.changed > '0'
@@ -55,16 +143,31 @@ jobs:
           commit-message: "chore: bump oh-my-pi to ${{ steps.versions.outputs.latest_ref }}"
           title: "chore: bump oh-my-pi to ${{ steps.versions.outputs.latest_ref }}"
           body: |
-            Upstream relay/wire source changed between `${{ steps.versions.outputs.current_ref }}` and `${{ steps.versions.outputs.latest_ref }}`:
-            https://github.com/can1357/oh-my-pi/compare/${{ steps.versions.outputs.current_ref }}...${{ steps.versions.outputs.latest_ref }}
+            Upstream relay/wire source changed between `${{ steps.versions.outputs.current_ref }}` (`${{ steps.versions.outputs.current_sha }}`) and `${{ steps.versions.outputs.latest_ref }}` (`${{ steps.versions.outputs.latest_sha }}`):
+            https://github.com/can1357/oh-my-pi/compare/${{ steps.versions.outputs.current_sha }}...${{ steps.versions.outputs.latest_sha }}
 
-            Auto-merges once the build + relay contract smoke test pass.
+            **Changed files:**
+            ```
+            ${{ steps.diff.outputs.changed_files }}
+            ```
+
+            **Commits:**
+            ${{ steps.diff.outputs.commit_summary }}
+
+            ${{ steps.diff.outputs.status_note }}
           branch: auto/bump-omp-${{ steps.versions.outputs.latest_ref }}
           labels: automated
 
       - name: Enable auto-merge
-        if: steps.diff.outputs.changed > '0' && steps.pr.outputs.pull-request-number
+        if: steps.diff.outputs.changed > '0' && steps.diff.outputs.needs_review != 'true' && steps.pr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
         run: gh pr merge --auto --squash "${PR_NUMBER}"
+
+      - name: Label PR for manual review
+        if: steps.diff.outputs.changed > '0' && steps.diff.outputs.needs_review == 'true' && steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
+        run: gh pr edit "${PR_NUMBER}" --add-label needs-review

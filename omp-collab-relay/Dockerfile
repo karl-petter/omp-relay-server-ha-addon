@@ -1,9 +1,13 @@
 # syntax=docker/dockerfile:1
 FROM oven/bun:alpine@sha256:629e17411f1f129dbec3af78d5af9c9f2a937435c80349437206c6b0b7422373 AS vendor
 ARG OMP_REF=v18.9.0
+ARG OMP_SHA=eec114a9226da698ebc015fd8996a8ca3bc4625c
 WORKDIR /omp
 RUN apk add --no-cache git \
-    && git clone --branch "${OMP_REF}" --depth 1 https://github.com/can1357/oh-my-pi.git . \
+    && git init -q . \
+    && git remote add origin https://github.com/can1357/oh-my-pi.git \
+    && git fetch --depth 1 origin "${OMP_SHA}" \
+    && git checkout -q FETCH_HEAD \
     && rm -rf .git
 RUN bun install --production --filter '!./' --filter '@oh-my-pi/collab-web...'
 
