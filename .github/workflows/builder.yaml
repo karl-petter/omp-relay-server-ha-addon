@@ -56,6 +56,49 @@ jobs:
           image-name: ${{ steps.normalize.outputs.image_name }}
           registry-prefix: ${{ steps.normalize.outputs.registry_prefix }}
 
+  audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Determine the pinned oh-my-pi commit
+        id: pin
+        run: |
+          sha=$(grep -oP '^ARG OMP_SHA=\K.*' omp-collab-relay/Dockerfile)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Clone the pinned source and install the relay's dependencies
+        env:
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          mkdir /tmp/oh-my-pi && cd /tmp/oh-my-pi
+          git init -q
+          git remote add origin https://github.com/can1357/oh-my-pi.git
+          git fetch --depth 1 origin "${SHA}"
+          git checkout -q FETCH_HEAD
+          bun install --production --filter '!./' --filter '@oh-my-pi/collab-web...'
+
+      - name: Audit only the packages this image actually ships
+        working-directory: /tmp/oh-my-pi
+        run: |
+          installed=$(find -L node_modules -name package.json -exec jq -r '.name // empty' {} \; | sort -u)
+          bun audit --json > /tmp/audit.json 2>/tmp/audit-text.txt || true
+          cat /tmp/audit-text.txt
+          vulnerable=$(jq -r 'keys[]' /tmp/audit.json 2>/dev/null | sort -u)
+          shipped_vulnerable=$(comm -12 <(echo "$installed") <(echo "$vulnerable"))
+          if [[ -n "$shipped_vulnerable" ]]; then
+            echo "::error::Known vulnerabilities in packages this image actually ships: $(echo "$shipped_vulnerable" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "No known vulnerabilities in the shipped dependency tree."
+
   build:
     name: Build ${{ matrix.arch }} image
     needs: prepare
@@ -123,7 +166,7 @@ jobs:
 
   manifest:
     name: Publish multi-arch manifest
-    needs: [prepare, build]
+    needs: [prepare, audit, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
