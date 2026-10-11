@@ -1,0 +1,14 @@
+name: "OMP Collab Relay"
+version: "18.9.0"
+slug: "omp-collab-relay"
+description: "Self-hosted relay for oh-my-pi (omp) /collab live session sharing. Lets omp host and guest terminals exchange end-to-end-encrypted collab frames without the public my.omp.sh service. Plain ws:// only — see README for remote (non-localhost) use, which needs your own TLS proxy."
+url: "https://github.com/karl-petter/omp-relay-server-ha-addon"
+arch:
+  - amd64
+  - aarch64
+image: "ghcr.io/karl-petter/omp-collab-relay"
+ports:
+  7466/tcp: 7466
+ports_description:
+  7466/tcp: "OMP collab relay WebSocket port (plain ws://, no TLS)"
+watchdog: "tcp://[HOST]:7466"

@@ -1,0 +1,69 @@
+name: Check for oh-my-pi updates
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Determine current and latest oh-my-pi version
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          current_ref=$(grep -oP '^ARG OMP_REF=\K.*' omp-collab-relay/Dockerfile)
+          latest_ref=$(gh api repos/can1357/oh-my-pi/releases/latest --jq .tag_name)
+          echo "current_ref=${current_ref}" >> "$GITHUB_OUTPUT"
+          echo "latest_ref=${latest_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the relay/wire source actually changed
+        id: diff
+        if: steps.versions.outputs.current_ref != steps.versions.outputs.latest_ref
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REF: ${{ steps.versions.outputs.current_ref }}
+          LATEST_REF: ${{ steps.versions.outputs.latest_ref }}
+        run: |
+          changed=$(gh api "repos/can1357/oh-my-pi/compare/${CURRENT_REF}...${LATEST_REF}" \
+            --jq '[.files[].filename | select(startswith("packages/collab-web/") or startswith("packages/wire/") or . == "package.json")] | length')
+          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump pinned version
+        if: steps.diff.outputs.changed > '0'
+        env:
+          LATEST_REF: ${{ steps.versions.outputs.latest_ref }}
+        run: |
+          new_version="${LATEST_REF#v}"
+          sed -i "s/^ARG OMP_REF=.*/ARG OMP_REF=${LATEST_REF}/" omp-collab-relay/Dockerfile
+          sed -i "s/^version: .*/version: \"${new_version}\"/" omp-collab-relay/config.yaml
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed > '0'
+        id: pr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PAT }}
+          commit-message: "chore: bump oh-my-pi to ${{ steps.versions.outputs.latest_ref }}"
+          title: "chore: bump oh-my-pi to ${{ steps.versions.outputs.latest_ref }}"
+          body: |
+            Upstream relay/wire source changed between `${{ steps.versions.outputs.current_ref }}` and `${{ steps.versions.outputs.latest_ref }}`:
+            https://github.com/can1357/oh-my-pi/compare/${{ steps.versions.outputs.current_ref }}...${{ steps.versions.outputs.latest_ref }}
+
+            Auto-merges once the build + relay contract smoke test pass.
+          branch: auto/bump-omp-${{ steps.versions.outputs.latest_ref }}
+          labels: automated
+
+      - name: Enable auto-merge
+        if: steps.diff.outputs.changed > '0' && steps.pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: gh pr merge --auto --squash "${{ steps.pr.outputs.pull-request-number }}"

@@ -1,0 +1,120 @@
+name: Builder
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      architectures: ${{ steps.info.outputs.architectures }}
+      build_matrix: ${{ steps.matrix.outputs.matrix }}
+      image_name: ${{ steps.normalize.outputs.image_name }}
+      registry_prefix: ${{ steps.normalize.outputs.registry_prefix }}
+      name: ${{ steps.info.outputs.name }}
+      description: ${{ steps.info.outputs.description }}
+      url: ${{ steps.info.outputs.url }}
+      version: ${{ steps.info.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Get add-on information
+        id: info
+        uses: home-assistant/actions/helpers/info@master
+        with:
+          path: "./omp-collab-relay"
+
+      - name: Split image into name + registry prefix
+        id: normalize
+        run: |
+          image="${{ steps.info.outputs.image }}"
+          echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
+          echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare multi-arch build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
+        with:
+          architectures: ${{ steps.info.outputs.architectures }}
+          image-name: ${{ steps.normalize.outputs.image_name }}
+          registry-prefix: ${{ steps.normalize.outputs.registry_prefix }}
+
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: "./omp-collab-relay"
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ github.event_name == 'push' && needs.prepare.outputs.version || 'pr-smoke' }}
+            ${{ github.event_name == 'push' && 'latest' || '' }}
+          labels: |
+            io.hass.type=app
+            io.hass.name=${{ needs.prepare.outputs.name }}
+            io.hass.description=${{ needs.prepare.outputs.description }}
+            io.hass.url=${{ needs.prepare.outputs.url }}
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          version: ${{ needs.prepare.outputs.version }}
+
+      - name: Set up Node for the smoke test
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run relay contract smoke test
+        if: github.event_name == 'pull_request'
+        run: |
+          docker run -d --name relay-smoke -p 7466:7466 ${{ matrix.image }}:pr-smoke
+          for i in $(seq 1 20); do
+            (exec 3<>/dev/tcp/127.0.0.1/7466) 2>/dev/null && { exec 3<&- 3>&-; break; }
+            sleep 0.5
+          done
+          node test/relay-smoke.mjs
+          docker logs relay-smoke
+          docker rm -f relay-smoke
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [prepare, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.09.0
+        with:
+          architectures: ${{ needs.prepare.outputs.architectures }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ needs.prepare.outputs.image_name }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}
