@@ -50,6 +50,7 @@ jobs:
     name: Build ${{ matrix.arch }} image
     needs: prepare
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
@@ -89,10 +90,19 @@ jobs:
 
       - name: Run relay contract smoke test
         if: github.event_name == 'pull_request'
+        timeout-minutes: 3
         run: |
           docker run -d --name relay-smoke -p 7466:7466 ${{ matrix.image }}:pr-smoke
           for i in $(seq 1 20); do
-            (exec 3<>/dev/tcp/127.0.0.1/7466) 2>/dev/null && { exec 3<&- 3>&-; break; }
+            if docker logs relay-smoke 2>&1 | grep -q "listening on"; then
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "::error::relay container never logged its listening line"
+              docker logs relay-smoke
+              docker rm -f relay-smoke
+              exit 1
+            fi
             sleep 0.5
           done
           node test/relay-smoke.mjs
