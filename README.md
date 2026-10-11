@@ -37,6 +37,33 @@ Set `collab.relayUrl` in omp's settings (see upstream [`docs/collab.md`](https:/
 
 Or, for a one-off session without changing the default: `/collab ws://<home-assistant-host>:7466` (or the `wss://` proxy address).
 
+## Fronting with TLS for remote access
+
+Plain `ws://` only works when omp and the relay are on the same machine (or a tunnel presenting as one) — anything else needs a TLS-terminating reverse proxy in front of port 7466, exposed to omp as `wss://`. Two documented ways to do that, both ordinary Supervisor-managed add-ons (installed from the Store, covered by Home Assistant's normal backup/restore, no host-OS changes required):
+
+### Caddy, reusing a certificate you already have (recommended default)
+
+If your Home Assistant install already has a certificate at `/ssl/fullchain.pem` and `/ssl/privkey.pem` — the standard location both the official **Let's Encrypt** add-on and the **DuckDNS** add-on write to — the [Caddy 2 add-on](https://github.com/einschmidt/hassio-addons) can reuse it directly on a new port, with no second certificate issuance and no GUI/database add-ons to install:
+
+1. Add `https://github.com/einschmidt/hassio-addons` as a repository and install **Caddy 2** (don't start it yet).
+2. Via the **Terminal & SSH** add-on (or **Samba**), find Caddy's config folder with `ls /addon_configs/` (named `<hash>_caddy-2`) and create a Caddyfile at `/addon_configs/<hash>_caddy-2/Caddyfile`:
+   ```
+   your-domain.example:7467 {
+       tls /ssl/fullchain.pem /ssl/privkey.pem
+       reverse_proxy localhost:7466
+   }
+   ```
+   Replace `your-domain.example` with the hostname your existing certificate actually covers, and `7467` with any free port.
+3. Set Caddy's **Configuration** tab to `non_caddyfile_config: {}`, `log_level: info`, `args: ["--watch"]`, `env_vars: []`, then **Start** it and check the Log tab for a clean startup with no ACME activity (it's using the static cert file, not requesting its own).
+4. If `your-domain.example` doesn't already resolve privately to this host — e.g. you're reaching it over a plain public DNS name rather than a VPN with split-horizon DNS for it — forward the port you picked on your router, the same way you forward whatever port your existing certificate's service already uses.
+5. Point omp at `wss://your-domain.example:7467`.
+
+Reusing the existing certificate on a new port avoids a second Let's Encrypt certificate for the same hostname (Let's Encrypt rate-limits duplicate certs per domain to roughly 5/week) and needs no new add-on dependencies beyond Caddy itself.
+
+### Nginx Proxy Manager (GUI, needs a database)
+
+If you'd rather manage proxy rules through a web UI, or already run Nginx Proxy Manager for other services, install the **MariaDB** and **Nginx Proxy Manager** add-ons from the Store, add a Proxy Host forwarding to `omp-collab-relay:7466` with **Websockets Support** enabled, and let it issue its own certificate for a domain of your choice. The Home Assistant add-on wrapper requires MariaDB rather than SQLite (likely to avoid SQLite file-locking issues reported on Raspberry Pi), so this path has more moving parts than the Caddy option above.
+
 ## Versioning
 
 The add-on version always mirrors the exact upstream `oh-my-pi` release it vendors. A daily check compares the pinned release against upstream's latest, and only bumps and republishes when the relay/wire source itself actually changed.
