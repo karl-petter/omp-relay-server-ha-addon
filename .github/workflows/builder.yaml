@@ -18,10 +18,10 @@ jobs:
       build_matrix: ${{ steps.matrix.outputs.matrix }}
       image_name: ${{ steps.normalize.outputs.image_name }}
       registry_prefix: ${{ steps.normalize.outputs.registry_prefix }}
-      name: ${{ steps.info.outputs.name }}
-      description: ${{ steps.info.outputs.description }}
-      url: ${{ steps.info.outputs.url }}
-      version: ${{ steps.info.outputs.version }}
+      name: ${{ steps.normalize.outputs.name }}
+      description: ${{ steps.normalize.outputs.description }}
+      url: ${{ steps.normalize.outputs.url }}
+      version: ${{ steps.normalize.outputs.version }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -31,12 +31,20 @@ jobs:
         with:
           path: "./omp-collab-relay"
 
-      - name: Split image into name + registry prefix
+      - name: Normalize add-on information
         id: normalize
         run: |
           image="${{ steps.info.outputs.image }}"
           echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
           echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+          name="${{ steps.info.outputs.name }}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          description="${{ steps.info.outputs.description }}"
+          echo "description=${description}" >> "$GITHUB_OUTPUT"
+          url="${{ steps.info.outputs.url }}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          version="${{ steps.info.outputs.version }}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare multi-arch build matrix
         id: matrix
