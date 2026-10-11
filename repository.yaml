@@ -1,0 +1,3 @@
+# https://developers.home-assistant.io/docs/apps/repository#repository-configuration
+name: "karl-petter's Home Assistant Add-ons"
+url: "https://github.com/karl-petter/omp-relay-server-ha-addon"
