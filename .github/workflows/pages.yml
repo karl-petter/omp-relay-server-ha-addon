@@ -1,0 +1,65 @@
+name: Deploy collab-web to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Determine the pinned oh-my-pi version
+        id: version
+        run: |
+          ref=$(grep -oP '^ARG OMP_REF=\K.*' omp-collab-relay/Dockerfile)
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: latest
+
+      - name: Clone the pinned collab-web source
+        run: git clone --branch "${{ steps.version.outputs.ref }}" --depth 1 https://github.com/can1357/oh-my-pi.git /tmp/oh-my-pi
+
+      - name: Build the static client
+        working-directory: /tmp/oh-my-pi
+        run: |
+          bun install --filter '!./' --filter '@oh-my-pi/collab-web...'
+          cd packages/collab-web
+          bun run build
+
+      - name: Strip the bundled analytics script
+        run: |
+          sed -i '/um\.can\.ac\/script\.js/d' /tmp/oh-my-pi/packages/collab-web/dist/index.html
+          if grep -q 'um.can.ac' /tmp/oh-my-pi/packages/collab-web/dist/index.html; then
+            echo "::error::analytics script still present after stripping"
+            exit 1
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6.0.0
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: /tmp/oh-my-pi/packages/collab-web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5.0.1
