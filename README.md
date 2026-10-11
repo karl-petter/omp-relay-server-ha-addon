@@ -9,6 +9,40 @@ In practice that means:
 - **Same machine as omp** (or over a tunnel that presents as `localhost`): works unmodified, point omp at `ws://localhost:7466`.
 - **Different machine than the omp client** (the normal case — this add-on runs on your Home Assistant host): you must front it with your own TLS reverse proxy (Nginx Proxy Manager, Caddy, Cloudflare Tunnel, Traefik, etc.) and point omp at the resulting `wss://` address. This add-on does not set that up for you.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph clients["omp clients (hold the room key)"]
+        host["omp host — /collab"]
+        guest["omp guest"]
+        browserGuest["Browser/QR guest"]
+    end
+
+    host -. "ws://localhost (same machine)" .-> relay
+    guest -. "ws://localhost (same machine)" .-> relay
+
+    host --> net
+    guest --> net
+    browserGuest --> net
+    net{"How clients reach the Home Assistant host"}
+
+    net == "private network: WireGuard / other VPN\nno router port-forward — recommended" ==> proxy
+    net -. "public internet: port-forwarded\nneeds TLS proxy rate-limit" .-> proxy
+
+    subgraph ha["Home Assistant host"]
+        proxy["TLS reverse proxy\nCaddy / Nginx Proxy Manager"]
+        relay["OMP Collab Relay add-on\nlocal-relay.ts : 7466\nforwards encrypted frames by roomId\n(never sees the room key)"]
+    end
+    proxy -- "ws://127.0.0.1:7466 (loopback)" --> relay
+
+    browserGuest -. "public internet: fetch static JS/CSS\n(room key stays in URL #fragment)" .-> pages["GitHub Pages\ncollab-web static build"]
+```
+
+The relay only ever sees encrypted frames tagged with a room ID — it pairs host and guest sockets for the same room and forwards bytes, nothing more. The room key that decrypts those frames is generated client-side and never transmitted to the relay; for browser/QR guests it travels only in the URL fragment after `#`, which browsers never send to a server.
+
+The diamond marks the one place your network topology matters: clients reaching the Home Assistant host over a private network you control — WireGuard or another VPN, with no router port-forward — take the recommended path; see the "recommended default" note in [Fronting with TLS for remote access](#fronting-with-tls-for-remote-access). Port-forwarding the TLS proxy to the public internet instead also works, but needs the rate-limiting covered in [Hardening beyond TLS](#hardening-beyond-tls), since the relay has no auth of its own. Either way the connection terminates at `wss://`, not the relay's own `ws://` — the relay has no TLS, so the TLS reverse proxy sits in front of it regardless of whether the client is the omp CLI or a browser/QR guest. The one hop that's unconditionally public internet, independent of which network path you choose, is the static JS/CSS fetch from GitHub Pages for browser/QR guests — but that page never receives the room key, so it can't decrypt or join the session; it only renders the client that then connects to your relay.
+
 ## Add this repository
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkarl-petter%2Fomp-relay-server-ha-addon)
