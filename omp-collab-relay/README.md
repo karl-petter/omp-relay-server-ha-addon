@@ -2,9 +2,9 @@
 
 [`oh-my-pi`](https://github.com/can1357/oh-my-pi) (omp) is a terminal coding agent. Its `/collab` command shares a running session live — with another terminal, or a browser/QR link — so you or a teammate can watch an agent work, or jump in and prompt it, from anywhere. By default that goes through omp's own hosted relay, `my.omp.sh`; this add-on runs that relay yourself instead, listening on port 7466. Every collab frame is end-to-end encrypted before it reaches the relay, so self-hosting it means no third party ever sees your prompts, code, or session content.
 
-## One caveat
+## One thing to know
 
-This runs upstream's documented `local-relay.ts`, a stand-in for local/offline use: no TLS, no browser client (`GET /` 404s), no `/share` blob endpoints, no `/healthz`. omp only accepts plain `ws://` relay URLs when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname needs `wss://`. This add-on does not terminate TLS.
+Out of the box this is the stripped-down build omp ships for local and offline use — it skips TLS and doesn't serve a browser client on its own. Reaching it from anywhere other than this same machine needs your own TLS proxy in front of it:
 
 - **Same machine as omp:** works unmodified via `ws://localhost:7466`.
 - **Any other machine:** front this add-on with your own TLS reverse proxy (Nginx Proxy Manager, Caddy, Cloudflare Tunnel, Traefik, etc.) and use the resulting `wss://` address. A private network back to this host (WireGuard, Tailscale, or another VPN) is the expected setup — see the parent repository's [architecture section](https://github.com/karl-petter/omp-relay-server-ha-addon#architecture).
