@@ -1,65 +1,8 @@
 # OMP Collab Relay — Home Assistant Add-on
 
-[`oh-my-pi`](https://github.com/can1357/oh-my-pi) (omp) is a terminal coding agent. Its `/collab` command shares a running session live — with another terminal, or a browser/QR link — so you or a teammate can watch an agent work, or jump in and prompt it, from anywhere. By default `/collab` carries that session through omp's own hosted relay, `my.omp.sh`. This add-on runs that relay yourself instead, as an ordinary Home Assistant add-on: every collab frame is end-to-end encrypted before it reaches the relay, so self-hosting it means no third party ever sees your prompts, code, or session content — not just the relay, but the browser client too (see [Self-hosting the browser client](#self-hosting-the-browser-client-optional) below).
+[`oh-my-pi`](https://github.com/can1357/oh-my-pi) (omp) is a terminal coding agent. Its `/collab` command shares a running session live — with another terminal, or a browser/QR link — so you or a teammate can watch an agent work, or jump in and prompt it, from anywhere. By default `/collab` carries that session through omp's own hosted relay, `my.omp.sh`. This add-on runs that relay yourself instead, as an ordinary Home Assistant add-on: every collab frame is end-to-end encrypted before it reaches the relay, so self-hosting it means no third party ever sees your prompts, code, or session content — not just the relay, but the browser client too (see [Self-hosting the browser client](#self-hosting-the-browser-client-optional)).
 
-**One caveat:** the upstream script this add-on runs, `local-relay.ts`, is documented as a stand-in for local/offline use — on its own it has no TLS and serves no browser client, `/share` endpoint, or `/healthz`, only the WebSocket upgrade itself. This repo closes both gaps (TLS via your own reverse proxy, a self-hosted browser client published to GitHub Pages), but the practical result is the same rule the omp CLI and browser client both enforce: plain `ws://` is only accepted when the hostname is `localhost`, `127.0.0.1`, or `::1` — any other hostname must be `wss://`. This add-on does not terminate TLS itself.
-
-In practice, for the scenario this add-on exists for — you don't run any other server, just Home Assistant, and want `/collab` to work when you're away from home — the expected setup is:
-
-- **Golden path: connect back over a private network you control** — WireGuard, Tailscale, or another VPN — then front the add-on with your own TLS reverse proxy (see [Fronting with TLS for remote access](#fronting-with-tls-for-remote-access)) and point omp at the resulting `wss://` address. No router port-forward needed; see the [architecture](#architecture) section below.
-
-Two other setups also work, but aren't what this add-on is built around:
-
-- **Same machine as omp** (or over a tunnel that presents as `localhost`): works unmodified, point omp at `ws://localhost:7466` — mainly useful for local testing, not day-to-day remote use.
-- **Forwarding the TLS proxy straight to the public internet** instead of a VPN: also supported, but needs the rate-limiting covered in [Hardening beyond TLS](#hardening-beyond-tls), since the relay has no authentication of its own.
-
-## Architecture
-
-### Golden path: private network (WireGuard or another VPN)
-
-```mermaid
-flowchart LR
-    subgraph clients["omp clients (hold the room key)"]
-        host["omp host — /collab"]
-        guest["omp guest"]
-        browserGuest["Browser/QR guest"]
-    end
-
-    host == "wss:// over your VPN" ==> proxy
-    guest == "wss:// over your VPN" ==> proxy
-    browserGuest == "wss:// over your VPN" ==> proxy
-
-    subgraph ha["Home Assistant host"]
-        proxy["TLS reverse proxy\nCaddy / Nginx Proxy Manager"]
-        relay["OMP Collab Relay add-on\nlocal-relay.ts : 7466\nforwards encrypted frames by roomId\n(never sees the room key)"]
-    end
-    proxy -- "ws://127.0.0.1:7466 (loopback)" --> relay
-
-    browserGuest -. "public internet: fetch static JS/CSS\n(room key stays in URL #fragment)" .-> pages["GitHub Pages\ncollab-web static build"]
-```
-
-Clients reach the Home Assistant host only through a private network you control — no router port-forward, nothing exposed to the public internet. The relay only ever sees encrypted frames tagged with a room ID — it pairs host and guest sockets for the same room and forwards bytes, nothing more — and the TLS reverse proxy sits in front of it because the relay itself has no TLS (see [Fronting with TLS for remote access](#fronting-with-tls-for-remote-access)). The room key that decrypts those frames is generated client-side and never transmitted to the relay; for browser/QR guests it travels only in the URL fragment after `#`, which browsers never send to a server. The one hop that's unconditionally public internet regardless of network path is the static JS/CSS fetch from GitHub Pages for browser/QR guests — but that page never receives the room key, so it can't decrypt or join the session; it only renders the client that then connects to your relay.
-
-### Also possible: same machine as omp
-
-```mermaid
-flowchart LR
-    host["omp host — /collab"] -- "ws://localhost:7466" --> relay["OMP Collab Relay add-on\n(same machine as omp)"]
-    guest["omp guest"] -- "ws://localhost:7466" --> relay
-```
-
-No TLS, no proxy, no network path to reason about — useful for local testing, not for day-to-day remote use.
-
-### Also possible: public internet port-forward
-
-```mermaid
-flowchart LR
-    host["omp host — /collab"] -. "wss:// over the public internet" .-> proxy["TLS reverse proxy\n(port forwarded on your router)"]
-    guest["omp guest"] -. "wss:// over the public internet" .-> proxy
-    proxy -- "ws://127.0.0.1:7466" --> relay["OMP Collab Relay add-on"]
-```
-
-Works the same way as the golden path, minus the VPN — your TLS proxy's port is forwarded straight to the internet instead. Needs the rate-limiting covered in [Hardening beyond TLS](#hardening-beyond-tls), since the relay has no authentication of its own.
+**One thing to know:** out of the box, this add-on's relay is the stripped-down build omp ships for local and offline use — on its own it skips TLS and doesn't serve a browser client. This repository adds both back: front it with your own TLS proxy and it behaves just like the hosted service end to end, including a self-hosted browser client for QR/link joins, just running on infrastructure you control instead of a third party's. The [install steps](#install-and-start) below cover both.
 
 ## Add this repository
 
@@ -124,7 +67,7 @@ If you forward the add-on's TLS proxy port straight to the public internet inste
 
 ## Self-hosting the browser client (optional)
 
-`/collab` always prints a browser link alongside the terminal one, but this add-on's relay doesn't serve that client itself (see the limitation above). This repository publishes one anyway, independent of the add-on: `.github/workflows/pages.yml` builds `packages/collab-web`'s static output from the same pinned `oh-my-pi` release the relay vendors, strips the bundled third-party analytics script, and deploys it to GitHub Pages on every push to `main` — no container, nothing added to the Home Assistant host.
+`/collab` always prints a browser link alongside the terminal one, but this add-on's relay doesn't serve that client itself (see "One thing to know" near the top of this README). This repository publishes one anyway, independent of the add-on: `.github/workflows/pages.yml` builds `packages/collab-web`'s static output from the same pinned `oh-my-pi` release the relay vendors, strips the bundled third-party analytics script, and deploys it to GitHub Pages on every push to `main` — no container, nothing added to the Home Assistant host.
 
 The room secret lives only in the URL fragment (the part after `#`), which browsers never send to the page's server by spec — GitHub Pages only ever serves the same static JS/CSS/HTML to every visitor; your actual session traffic goes straight from the browser to your relay over `wss://`, so this stays fully self-hosted end to end.
 
@@ -136,6 +79,66 @@ omp config set collab.webUrl https://<your-fork-owner>.github.io/<your-fork-name
 
 `/collab` then prints a browser link pointing at your own GitHub Pages site instead of `my.omp.sh`, with the relay connection itself still carried entirely by this add-on.
 
+## Architecture
+
+A closer look at how traffic actually flows — useful if you're troubleshooting, evaluating the security model, or your setup doesn't match the walkthrough above.
+
+### Golden path: private network (WireGuard or another VPN)
+
+```mermaid
+flowchart LR
+    subgraph clients["omp clients (hold the room key)"]
+        host["omp host — /collab"]
+        guest["omp guest"]
+        browserGuest["Browser/QR guest"]
+    end
+
+    host == "wss:// over your VPN" ==> proxy
+    guest == "wss:// over your VPN" ==> proxy
+    browserGuest == "wss:// over your VPN" ==> proxy
+
+    subgraph ha["Home Assistant host"]
+        proxy["TLS reverse proxy\nCaddy / Nginx Proxy Manager"]
+        relay["OMP Collab Relay add-on\nlocal-relay.ts : 7466\nforwards encrypted frames by roomId\n(never sees the room key)"]
+    end
+    proxy -- "ws://127.0.0.1:7466 (loopback)" --> relay
+
+    browserGuest -. "public internet: fetch static JS/CSS\n(room key stays in URL #fragment)" .-> pages["GitHub Pages\ncollab-web static build"]
+```
+
+Clients reach the Home Assistant host only through a private network you control — no router port-forward, nothing exposed to the public internet. The relay only ever sees encrypted frames tagged with a room ID — it pairs host and guest sockets for the same room and forwards bytes, nothing more — and the TLS reverse proxy sits in front of it because the relay itself has no TLS (see [Fronting with TLS for remote access](#fronting-with-tls-for-remote-access)). The room key that decrypts those frames is generated client-side and never transmitted to the relay; for browser/QR guests it travels only in the URL fragment after `#`, which browsers never send to a server. The one hop that's unconditionally public internet regardless of network path is the static JS/CSS fetch from GitHub Pages for browser/QR guests — but that page never receives the room key, so it can't decrypt or join the session; it only renders the client that then connects to your relay.
+
+### Also possible: same machine as omp
+
+```mermaid
+flowchart LR
+    host["omp host — /collab"] -- "ws://localhost:7466" --> relay["OMP Collab Relay add-on\n(same machine as omp)"]
+    guest["omp guest"] -- "ws://localhost:7466" --> relay
+```
+
+No TLS, no proxy, no network path to reason about — useful for local testing, not for day-to-day remote use.
+
+### Also possible: public internet port-forward
+
+```mermaid
+flowchart LR
+    host["omp host — /collab"] -. "wss:// over the public internet" .-> proxy["TLS reverse proxy\n(port forwarded on your router)"]
+    guest["omp guest"] -. "wss:// over the public internet" .-> proxy
+    proxy -- "ws://127.0.0.1:7466" --> relay["OMP Collab Relay add-on"]
+```
+
+Works the same way as the golden path, minus the VPN — your TLS proxy's port is forwarded straight to the internet instead. Needs the rate-limiting covered in [Hardening beyond TLS](#hardening-beyond-tls), since the relay has no authentication of its own.
+
 ## Versioning
 
 The add-on version always mirrors the exact upstream `oh-my-pi` release it vendors. A daily check compares the pinned release against upstream's latest, and only bumps and republishes when the relay/wire source itself actually changed.
+
+## Contributing
+
+Pull requests are welcome. A few things to know before opening one:
+
+- `main` is protected: merges require the **Build amd64 image**, **Build aarch64 image**, and **Dependency vulnerability audit** checks (see [`.github/workflows/builder.yaml`](.github/workflows/builder.yaml)) to pass. Pull requests also run the relay contract smoke test ([`test/relay-smoke.mjs`](test/relay-smoke.mjs)) against the image they build.
+- The pinned `oh-my-pi` version in `omp-collab-relay/Dockerfile` and `omp-collab-relay/config.yaml` is bumped automatically by [`.github/workflows/update-check.yaml`](.github/workflows/update-check.yaml) once upstream publishes a release — don't bump it by hand in a PR.
+- GitHub Actions dependencies are pinned by commit SHA (with a version comment) and kept current by Dependabot; keep that pattern for any action you add or update.
+
+For anything bigger than a small fix, open an issue first to discuss the approach.
