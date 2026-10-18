@@ -52,7 +52,7 @@ jobs:
 
       - name: Get add-on information
         id: info
-        uses: home-assistant/actions/helpers/info@06749dd8c0b54f350bc69c8752456cee498808a3 # master (2026-10-11)
+        uses: home-assistant/actions/helpers/info@cd6f3635a740c84d8a14f6121a90068b8ece6bf6 # master (2026-10-11)
         with:
           path: "./omp-collab-relay"
 
