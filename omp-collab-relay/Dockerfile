@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM oven/bun:alpine@sha256:629e17411f1f129dbec3af78d5af9c9f2a937435c80349437206c6b0b7422373 AS vendor
-ARG OMP_REF=v18.9.0
-ARG OMP_SHA=eec114a9226da698ebc015fd8996a8ca3bc4625c
+ARG OMP_REF=v18.11.3
+ARG OMP_SHA=96894a6147d8cc64b7e00ad3a7d7178fd93b9531
 WORKDIR /omp
 RUN apk add --no-cache git \
     && git init -q . \

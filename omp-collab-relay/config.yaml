@@ -1,5 +1,5 @@
 name: "OMP Collab Relay"
-version: "18.9.0"
+version: "18.11.3"
 slug: "omp-collab-relay"
 description: "Self-hosted relay for oh-my-pi (omp) /collab live session sharing. Lets omp host and guest terminals exchange end-to-end-encrypted collab frames without the public my.omp.sh service. Plain ws:// only — see README for remote (non-localhost) use, which needs your own TLS proxy."
 url: "https://github.com/karl-petter/omp-relay-server-ha-addon"
