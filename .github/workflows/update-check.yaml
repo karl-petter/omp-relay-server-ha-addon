@@ -71,7 +71,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           {
             echo "commit_summary<<EOF"
-            jq -r '.commits[] | "- `" + .sha[0:7] + "` " + (.author.login // .commit.author.email) + ": " + (.commit.message | split("\n")[0])' <<<"$compare"
+            jq -r '.commits[] | "- `" + .sha[0:7] + "` " + (.author.login // .commit.author.email) + ": " + ((.commit.message | split("\n")[0]) | gsub("@"; "@\u200b"))' <<<"$compare"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -155,19 +155,24 @@ jobs:
             ${{ steps.diff.outputs.commit_summary }}
 
             ${{ steps.diff.outputs.status_note }}
-          branch: auto/bump-omp-${{ steps.versions.outputs.latest_ref }}
+          branch: auto/bump-omp
           labels: automated
 
-      - name: Enable auto-merge
-        if: steps.diff.outputs.changed > '0' && steps.diff.outputs.needs_review != 'true' && steps.pr.outputs.pull-request-number
+      - name: Sync review status
+        if: steps.diff.outputs.changed > '0' && steps.pr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
-        run: gh pr merge --auto --squash "${PR_NUMBER}"
-
-      - name: Label PR for manual review
-        if: steps.diff.outputs.changed > '0' && steps.diff.outputs.needs_review == 'true' && steps.pr.outputs.pull-request-number
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          PR_NUMBER: ${{ steps.pr.outputs.pull-request-number }}
-        run: gh pr edit "${PR_NUMBER}" --add-label needs-review
+          NEEDS_REVIEW: ${{ steps.diff.outputs.needs_review }}
+        run: |
+          # An update to an already-open PR can flip needs_review in either
+          # direction relative to when the PR was first opened, so both the
+          # auto-merge flag and the label must be reconciled every run
+          # rather than only ever set once.
+          if [[ "$NEEDS_REVIEW" == "true" ]]; then
+            gh pr merge --disable-auto "$PR_NUMBER" || true
+            gh pr edit "$PR_NUMBER" --add-label needs-review
+          else
+            gh pr edit "$PR_NUMBER" --remove-label needs-review || true
+            gh pr merge --auto --squash "$PR_NUMBER"
+          fi
